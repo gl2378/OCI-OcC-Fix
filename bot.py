@@ -13,6 +13,7 @@ import telebot
 import datetime
 import configparser
 import json
+import requests
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict, Optional, List
@@ -20,8 +21,8 @@ from typing import Dict, Optional, List
 # Constants
 CONFIG_FILE = 'configuration.ini'
 LOG_FILE = 'oci_occ.log'
-MAX_LOG_SIZE = 5 * 1024 * 1024  # 5 MB
-LOG_BACKUP_COUNT = 3
+MAX_LOG_SIZE = 2 * 1024 * 1024  # 2 MB
+LOG_BACKUP_COUNT = 4  # 4 backups + current = 5 files total
 
 class OciOccFix:
     def __init__(self):
@@ -41,12 +42,13 @@ class OciOccFix:
         
         # Phase 4: Telegram integration
         # Fixed execution order
-        self.tg_message_id = None
-        self.tg_bot = self.initialize_telegram()
+        # self.tg_message_id = None
+        # self.tg_bot = self.initialize_telegram()
         
         # Phase 5: Runtime state
         self.total_retries = 0
         self.retry_counter = 0
+        self.last_status_notify_ts = time.time()
 
     @staticmethod
     def load_config() -> configparser.ConfigParser:
@@ -114,6 +116,24 @@ class OciOccFix:
         except Exception as e:
             logging.error(f"OCI client initialization failed: {str(e)}")
             sys.exit(1)
+
+    @staticmethod
+    def format_response_data(data) -> str:
+        """Serialize OCI response data for logging"""
+        def serialize_item(item):
+            if hasattr(item, 'to_dict'):
+                return item.to_dict()
+            return item
+
+        if isinstance(data, list):
+            serializable = [serialize_item(item) for item in data]
+        else:
+            serializable = serialize_item(data)
+
+        try:
+            return json.dumps(serializable, ensure_ascii=True, sort_keys=True)
+        except TypeError:
+            return str(serializable)
 
     def initialize_telegram(self) -> Optional[telebot.TeleBot]:
         """Initialize Telegram bot with safe defaults"""
@@ -261,14 +281,23 @@ class OciOccFix:
             response = self.clients['compute'].launch_instance(
                 launch_instance_details=launch_details
             )
+            logging.info(
+                f"Launch instance response: {self.format_response_data(response.data)}"
+            )
             return response.data.id
         except oci.exceptions.ServiceError as e:
             logging.warning(
                 f"Create failed in {availability_domain}: {e.code} - {e.message}"
             )
+            self.adaptive_retry_wait(e.code)
             return None
         except Exception as e:
             logging.error(f"Unexpected creation error: {str(e)}")
+            self.send_weixin_update(
+                "❌ Create instance error",
+                f"• AD: {availability_domain}\n"
+                f"• Error: {str(e)}"
+            )
             return None
 
     def get_source_details(self):
@@ -295,21 +324,33 @@ class OciOccFix:
             vnic = self.clients['compute'].list_vnic_attachments(
                 compartment_id=self.config.get('OCI', 'compartment_id'),
                 instance_id=instance_id
-            ).data[0]
+            )
+            logging.info(
+                f"List VNIC attachments response: {self.format_response_data(vnic.data)}"
+            )
+            vnic = vnic.data[0]
 
             private_ip = self.clients['network'].list_private_ips(
                 vnic_id=vnic.vnic_id
-            ).data[0].id
+            )
+            logging.info(
+                f"List private IPs response: {self.format_response_data(private_ip.data)}"
+            )
+            private_ip = private_ip.data[0].id
 
             public_ip = self.clients['network'].get_public_ip_by_private_ip_id(
                 get_public_ip_by_private_ip_id_details=oci.core.models.GetPublicIpByPrivateIpIdDetails(
                     private_ip_id=private_ip
                 )
-            ).data.ip_address
+            )
+            logging.info(
+                f"Get public IP response: {self.format_response_data(public_ip.data)}"
+            )
+            public_ip = public_ip.data.ip_address
 
             logging.info(f"✅ Instance created! Public IP: {public_ip}")
-            self.send_telegram_update(
-                f"🚀 Instance Ready!\n"
+            self.send_weixin_update(
+                "🚀 Instance Ready!",
                 f"• IP: {public_ip}\n"
                 f"• Retries: {self.total_retries}\n"
                 f"• Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
@@ -318,6 +359,11 @@ class OciOccFix:
 
         except Exception as e:
             logging.error(f"Success handling failed: {str(e)}")
+            self.send_weixin_update(
+                "❌ Success handler error",
+                f"• Instance ID: {instance_id}\n"
+                f"• Error: {str(e)}"
+            )
             sys.exit(1)
 
     def send_telegram_update(self, message: str):
@@ -333,6 +379,62 @@ class OciOccFix:
             )
         except Exception as e:
             logging.warning(f"Telegram update failed: {str(e)}")
+
+    def send_weixin_update(self, title: str, text: str = ""):
+        """Send Weixin bot message with error handling"""
+        bot_url = self.config.get('Weixin', 'bot_url', fallback='')
+        if not bot_url or bot_url == 'xxxx':
+            return
+
+        content = f"{title}\n{text}".strip()
+        data = json.dumps(
+            {
+                "msgtype": "text",
+                "text": {"content": content}
+            },
+            ensure_ascii=True
+        )
+        headers = {'Content-Type': 'application/json'}
+
+        try:
+            response = requests.post(
+                bot_url,
+                headers=headers,
+                data=data,
+                timeout=10
+            )
+            logging.info(f"Weixin notify response: {response.text}")
+        except Exception as e:
+            logging.warning(f"Weixin notify failed: {str(e)}")
+
+    def get_status_interval_seconds(self) -> int:
+        """Get status notification interval in seconds"""
+        if self.config.has_section('Notify') and self.config.has_option(
+            'Notify', 'status_interval_minutes'
+        ):
+            minutes = self.config.getint('Notify', 'status_interval_minutes')
+        else:
+            minutes = 30
+
+        return max(minutes, 0) * 60
+
+    def maybe_send_status_update(self, ad: str):
+        """Send periodic status update based on elapsed time"""
+        interval_seconds = self.get_status_interval_seconds()
+        if interval_seconds <= 0:
+            return
+
+        now = time.time()
+        if now - self.last_status_notify_ts < interval_seconds:
+            return
+
+        self.send_weixin_update(
+            f"🔁 Attempt {self.total_retries}",
+            f"• Last Error: {ad} capacity\n"
+            f"• Next retry: {self.wait_seconds:.1f}s\n"
+            f"• Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        self.last_status_notify_ts = now
 
     def adaptive_retry_wait(self, error_code: str):
         """Adjust retry timing with bounds checking"""
@@ -372,19 +474,17 @@ class OciOccFix:
                     if instance_id:
                         self.handle_success(instance_id)
                     
-                    # Update status every 10 attempts
-                    if self.total_retries % 10 == 0 and self.tg_bot:
-                        self.send_telegram_update(
-                            f"🔁 Attempt {self.total_retries}\n"
-                            f"• Last Error: {ad} capacity\n"
-                            f"• Next retry: {self.wait_seconds:.1f}s"
-                        )
+                    # Update status on a time interval
+                    self.maybe_send_status_update(ad)
 
                     time.sleep(self.wait_seconds)
 
             except KeyboardInterrupt:
                 logging.info("🛑 Process interrupted by user")
-                self.send_telegram_update("🛑 Process interrupted by user")
+                self.send_weixin_update(
+                    "🛑 Process interrupted",
+                    "Process interrupted by user"
+                )
                 sys.exit(0)
             except Exception as e:
                 error_code = getattr(e, 'code', 'Unknown')

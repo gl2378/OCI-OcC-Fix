@@ -1,0 +1,6 @@
+# Macos related
+.DS_Store
+
+
+*.log
+.idea/
