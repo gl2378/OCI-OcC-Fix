@@ -246,7 +246,7 @@ class OciOccFix:
                 source_details=self.get_source_details(),
                 create_vnic_details=oci.core.models.CreateVnicDetails(
                     subnet_id=self.config.get('OCI', 'subnet_id'),
-                    assign_public_ip=True
+                    assign_public_ip=False
                 ),
                 shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
                     ocpus=self.config.getint('Machine', 'ocpus'),
@@ -295,20 +295,31 @@ class OciOccFix:
                 instance_id=instance_id
             ).data[0]
 
-            private_ip = self.clients['network'].list_private_ips(
+            private_ip_obj = self.clients['network'].list_private_ips(
                 vnic_id=vnic.vnic_id
-            ).data[0].id
+            ).data[0]
+            private_ip = private_ip_obj.ip_address
 
-            public_ip = self.clients['network'].get_public_ip_by_private_ip_id(
-                oci.core.models.GetPublicIpByPrivateIpIdDetails(
-                    private_ip_id=private_ip
-                )
-            ).data.ip_address
+            # The instance is created without a public IP (assign_public_ip=False),
+            # so this lookup is best-effort: attach one manually later if needed.
+            public_ip = None
+            try:
+                public_ip = self.clients['network'].get_public_ip_by_private_ip_id(
+                    oci.core.models.GetPublicIpByPrivateIpIdDetails(
+                        private_ip_id=private_ip_obj.id
+                    )
+                ).data.ip_address
+            except Exception:
+                pass
 
-            logging.info(f"✅ Instance created! Public IP: {public_ip}")
+            ip_line = (
+                f"Public IP: {public_ip}" if public_ip
+                else f"Private IP: {private_ip} (no public IP - attach manually)"
+            )
+            logging.info(f"✅ Instance created! {ip_line}")
             self.send_telegram_update(
                 f"🚀 Instance Ready!\n"
-                f"• IP: {public_ip}\n"
+                f"• {ip_line}\n"
                 f"• Retries: {self.total_retries}\n"
                 f"• Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
             )
