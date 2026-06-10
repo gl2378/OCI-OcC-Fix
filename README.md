@@ -6,11 +6,19 @@ Automated solution for Oracle Cloud Infrastructure (OCI) Out of Capacity errors 
 [![Python Version](https://img.shields.io/badge/Python-3.8%2B-blueviolet?style=flat-square)](https://python.org)
 [![GitHub release](https://img.shields.io/github/release/mosesman831/OCI-OcC-Fix?color=blueviolet&style=flat-square)](https://github.com/mosesman831/OCI-OcC-Fix/releases/)
 ![GitHub License](https://img.shields.io/github/license/mosesman831/OCI-OcC-Fix)
+[![GitHub Clones](https://img.shields.io/badge/dynamic/json?color=success&label=Clone&query=count&url=https://gist.githubusercontent.com/mosesman831/7fe542add926a52bbdcee8e98f7bd81b/raw/clone.json&logo=github)](https://github.com/MShawon/github-clone-count-badge)
+[![GitHub Traffic](https://img.shields.io/badge/dynamic/json?color=success&label=Views&query=count&url=https://gist.githubusercontent.com/mosesman831/0baf70efa8613a220ad3633d7abb62cd/raw/traffic.json&logo=github)](https://github.com/MShawon/github-clone-count-badge)
+
+
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R6R1VPIGM)
 
 > **Maintained by [Moses](https://github.com/mosesman831)**  
 > **Special thanks to all [contributors](#contributors)**
+
+> [!TIP]
+> It is *HIGHLY* recommended you upgrade to PAYG plan if possible - they allow you to instantly create a VPS.
+> Nothing will be charged if you don't go over the free tier limits.
 
 ## Features ✨
 - 🚀 Multi-Availability Domain rotation
@@ -23,10 +31,9 @@ Automated solution for Oracle Cloud Infrastructure (OCI) Out of Capacity errors 
 ## Table of Contents
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Setup Wizard](#setup-wizard)
 - [Usage](#usage)
 - [Docker Setup](#docker-setup)
-- [Support](#show-your-support)
-- [Contributors](#contributors)
 
 # Installation
 
@@ -63,6 +70,28 @@ pip install -r requirements.txt
 ```
 # Configuration
 
+## Setup Wizard
+
+If you want a guided, step-by-step setup (recommended), run:
+
+```bash
+python3 setup_wizard.py
+```
+
+> [!IMPORTANT]
+> Run the wizard from the repository root so it can read/write `configuration.ini` and `config` in the locations that `bot.py` expects.
+> If you run it from another directory, pass the file paths explicitly with `--config` and `--oci-config`.
+
+Optional: use simple graphical dialogs (requires tkinter):
+
+```bash
+python3 setup_wizard.py --gui
+```
+
+The wizard walks you through each field and updates:
+- `configuration.ini`
+- `config` (OCI SDK config file)
+
 ## File Setup
 
     
@@ -77,7 +106,7 @@ Change image and shape.
 #### Step 3
 Adjust the Networking section, and set the "Do not assign a public IPv4 address" checkbox. If you don't have an existing VNIC/subnet, please create a VM.Standard.E2.1.Micro instance before doing anything.
 #### Step 4
-Download and save the public and private SSH keys.
+In the SSH Keys section, choose **"Generate a key pair for me"** or upload your own public key. OCI downloads the private key file during instance creation, and that is the file you use to connect to the instance later.
 #### Step 5
 Click `Ctrl + Shift + I` or `F12` to open browser's dev tools -> network tab
 #### Step 6
@@ -161,7 +190,7 @@ Change the settings to accommodate required retry settings.
 ; EXAMPLE: 1 | Minimum wait (seconds) | RECOMMENDED
 min_interval = 1
 ; EXAMPLE: 60 | Maximum wait (seconds) | RECOMMENDED
-max_interval = 30
+max_interval = 60
 ; EXAMPLE: 1 | Initial retry delay (seconds) | RECOMMENDED
 initial_retry_interval = 1
 ; EXAMPLE: 1.5 | Backoff multiplier | | RECOMMENDED
@@ -182,7 +211,16 @@ log_level = INFO
     
 2.  Download private key as  `oci_private_key.pem`
     
-3.  Copy the contents from the Text Box and save it to file `config`.
+3.  Create a `config` file in the repo root with the standard OCI SDK format (replace `user`, `fingerprint`, `tenancy`, `region`, and `key_file` with your actual OCI values; use the private key from step 2 for `key_file`):
+    
+```ini
+[DEFAULT]
+user=ocid1.user.oc1..exampleuniqueID
+fingerprint=aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99
+tenancy=ocid1.tenancy.oc1..exampleuniqueID
+region=us-ashburn-1
+key_file=/path/to/oci_private_key.pem
+```
     
 
 # Usage
@@ -221,35 +259,9 @@ docker logs -f oci-occ-fix
 ```bash
 docker compose down
 ```
-# Show Your Support
-
-Your support helps maintain and improve this project:
-
--   ⭐  **Star**  this repository
-    
--   🐛 Report issues in  [GitHub Issues](https://github.com/mosesman831/OCI-OcC-Fix/issues)
-    
--   ☕  [Buy me a coffee](https://ko-fi.com/R6R1VPIGM)
-    
-
-# Contributors
-
-Thanks to these amazing contributors:
-
-<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
-<!-- prettier-ignore-start -->
-<!-- markdownlint-disable -->
-<table>
-  <tbody>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Unlifate"><img src="https://avatars.githubusercontent.com/u/4685835?v=4?s=100" width="100px;" alt="Peter Eisenschmidt"/><br /><sub><b>Peter Eisenschmidt</b></sub></a><br /><a href="#code-Unlifate" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/aldacco"><img src="https://avatars.githubusercontent.com/u/86637158?v=4?s=100" width="100px;" alt="aldacco"/><br /><sub><b>aldacco</b></sub></a><br /><a href="#code-aldacco" title="Code">💻</a> <a href="#doc-aldacco" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://zege.rs"><img src="https://avatars.githubusercontent.com/u/110392702?v=4?s=100" width="100px;" alt="Joery Zegers"/><br /><sub><b>Joery Zegers</b></sub></a><br /><a href="#code-Joery" title="Code">💻</a></td>
-    </tr>
-  </tbody>
-</table>
 
 ----------
 
 **License**: GNU |  **Maintainer**:  [Moses](https://github.com/mosesman831)  
 **Report Issues**:  [GitHub Issues](https://github.com/mosesman831/OCI-OcC-Fix/issues)
+> This project is **AI‑driven** in its development and maintenance, using AI agents for code generation, refactoring, and PR reviews, with human design and final approval.
