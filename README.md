@@ -206,6 +206,34 @@ initial_retry_interval = 1
 ; EXAMPLE: 1.5 | Backoff multiplier | | RECOMMENDED
 backoff_factor = 1.5
 ```
+
+#### How the wait interval works
+
+The delay between attempts is **not fixed** — it adapts based on the API response, then is clamped to `[min_interval, max_interval]`:
+
+| Parameter | Meaning |
+|-----------|---------|
+| `initial_retry_interval` | Wait (seconds) used for the very first attempts, before any error adjusts it. |
+| `min_interval` | Lower bound. The wait never drops below this. |
+| `max_interval` | Upper bound. The wait never rises above this. |
+| `backoff_factor` | Multiplier applied **only** when the API rate-limits you (`TooManyRequests`). |
+
+Adaptive behaviour (see `adaptive_retry_wait` in `bot.py`):
+- On **`TooManyRequests`** (rate limited): wait is multiplied by `backoff_factor` (backs off, up to `max_interval`).
+- On **capacity errors** (`OutOfCapacity` / `OutOfHostCapacity`): wait is divided by 1.5 (pushes harder, down to `min_interval`).
+
+**To pin a fixed interval** (e.g. exactly 60 seconds per request), set all three timing values equal so the clamp leaves no room to drift:
+
+```ini
+[Retry]
+min_interval = 60
+max_interval = 60
+initial_retry_interval = 60
+backoff_factor = 1.5   ; ignored when min == max
+```
+
+> Note: the wait applies after **each** attempt, and the bot cycles through every availability domain in `availability_domains`. With a single domain this means one request per interval; with N domains it sleeps this interval between each domain.
+
 ### Logging Settings ([Logging] Section)
 #### Settings
 Change the settings to accommodate required instance settings.
