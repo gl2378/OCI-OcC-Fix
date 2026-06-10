@@ -14,6 +14,7 @@ import telebot
 import datetime
 import configparser
 import json
+import urllib.request
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict, Optional, List
@@ -44,10 +45,13 @@ class OciOccFix:
         # Phase 3: Service clients
         self.clients = self.initialize_oci_clients()
         
-        # Phase 4: Telegram integration
+        # Phase 4: Notification channels (Telegram + WeChat Work coexist)
         self.tg_message_id = None
         self.tg_bot = self.initialize_telegram()
-        
+        self.wx_url = self.initialize_weixin()
+        self.last_status_time = time.monotonic()
+        self.send_startup_notifications()
+
         # Phase 5: Runtime state
         self.total_retries = 0
         self.retry_counter = 0
@@ -130,15 +134,44 @@ class OciOccFix:
             return None
             
         try:
-            bot = telebot.TeleBot(bot_token)
-            self.send_telegram_startup_message(bot)
-            return bot
+            return telebot.TeleBot(bot_token)
         except Exception as e:
             logging.warning(f"Telegram initialization failed: {str(e)}")
             return None
 
-    def send_telegram_startup_message(self, bot: telebot.TeleBot):
-        """Send startup message with enhanced error handling"""
+    def initialize_weixin(self) -> Optional[str]:
+        """Enable WeChat Work webhook notifications if a URL is configured"""
+        bot_url = self.config.get('Weixin', 'bot_url', fallback='')
+        if not bot_url or bot_url == 'xxxx':
+            return None
+        return bot_url
+
+    def send_weixin(self, message: str) -> None:
+        """Send a text message to the WeChat Work webhook (best-effort)"""
+        if not self.wx_url:
+            return
+        try:
+            payload = json.dumps(
+                {"msgtype": "text", "text": {"content": message}}
+            ).encode("utf-8")
+            req = urllib.request.Request(
+                self.wx_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            if body.get("errcode") != 0:
+                logging.warning(
+                    f"WeChat notify failed: errcode={body.get('errcode')} "
+                    f"errmsg={body.get('errmsg')}"
+                )
+        except Exception as e:
+            logging.warning(f"WeChat notify failed: {str(e)}")
+
+    def build_startup_message(self) -> str:
+        """Compose the startup notification text"""
+        account = user = 'Unknown'
         try:
             tenancy = self.clients['identity'].get_tenancy(
                 self.oci_config['tenancy']
@@ -146,20 +179,41 @@ class OciOccFix:
             users = self.clients['identity'].list_users(
                 compartment_id=self.oci_config['tenancy']
             ).data
-            
-            message = (
-                "🚀 OCI-OcC-Fix Initialized\n"
-                f"• Account: {tenancy.name}\n"
-                f"• User: {users[0].email if users else 'Unknown'}\n"
-                f"• Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"• Retry Interval: {self.wait_seconds}s\n"
-                f"• Machine: {self.config.get('Machine', 'shape')}"
-            )
-            
-            sent = bot.send_message(self.config.get('Telegram', 'uid'), message)
-            self.tg_message_id = sent.message_id
+            account = tenancy.name
+            user = users[0].email if users else 'Unknown'
         except Exception as e:
-            logging.error(f"Telegram startup message failed: {str(e)}")
+            logging.error(f"Failed to fetch account info for startup message: {str(e)}")
+
+        return (
+            "🚀 OCI-OcC-Fix Initialized\n"
+            f"• Account: {account}\n"
+            f"• User: {user}\n"
+            f"• Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"• Retry Interval: {self.wait_seconds}s\n"
+            f"• Machine: {self.config.get('Machine', 'shape')}"
+        )
+
+    def send_startup_notifications(self) -> None:
+        """Send the startup message to every configured channel"""
+        if not self.tg_bot and not self.wx_url:
+            return
+        message = self.build_startup_message()
+        # Telegram keeps an editable message handle for live in-place updates
+        if self.tg_bot:
+            try:
+                sent = self.tg_bot.send_message(
+                    self.config.get('Telegram', 'uid'), message
+                )
+                self.tg_message_id = sent.message_id
+            except Exception as e:
+                logging.error(f"Telegram startup message failed: {str(e)}")
+        # WeChat Work webhook only supports posting new messages (no edit)
+        self.send_weixin(message)
+
+    def notify_update(self, message: str) -> None:
+        """Broadcast a status update to all configured channels"""
+        self.send_telegram_update(message)
+        self.send_weixin(message)
 
     def validate_resources(self) -> bool:
         """Perform comprehensive resource validation with error handling"""
@@ -317,7 +371,7 @@ class OciOccFix:
                 else f"Private IP: {private_ip} (no public IP - attach manually)"
             )
             logging.info(f"✅ Instance created! {ip_line}")
-            self.send_telegram_update(
+            self.notify_update(
                 f"🚀 Instance Ready!\n"
                 f"• {ip_line}\n"
                 f"• Retries: {self.total_retries}\n"
@@ -371,19 +425,25 @@ class OciOccFix:
             sys.exit(1)
 
         ads = json.loads(self.config.get('OCI', 'availability_domains'))
-        
+        status_interval = self.config.getint(
+            'Notify', 'status_interval_minutes', fallback=30
+        )
+
         while True:
             try:
                 for ad in ads:
                     self.total_retries += 1
                     instance_id = self.create_instance(ad)
-                    
+
                     if instance_id:
                         self.handle_success(instance_id)
-                    
-                    # Update status every 10 attempts
-                    if self.total_retries % 10 == 0 and self.tg_bot:
-                        self.send_telegram_update(
+
+                    # Periodic progress update, throttled by status_interval_minutes
+                    if status_interval > 0 and (
+                        time.monotonic() - self.last_status_time
+                    ) >= status_interval * 60:
+                        self.last_status_time = time.monotonic()
+                        self.notify_update(
                             f"🔁 Attempt {self.total_retries}\n"
                             f"• Last Error: {ad} capacity\n"
                             f"• Next retry: {self.wait_seconds:.1f}s"
@@ -393,7 +453,7 @@ class OciOccFix:
 
             except KeyboardInterrupt:
                 logging.info("🛑 Process interrupted by user")
-                self.send_telegram_update("🛑 Process interrupted by user")
+                self.notify_update("🛑 Process interrupted by user")
                 sys.exit(0)
             except Exception as e:
                 error_code = getattr(e, 'code', 'Unknown')

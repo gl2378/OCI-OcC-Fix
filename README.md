@@ -175,6 +175,34 @@ bot_token =
 ; EXAMPLE: 987654321 | Your Telegram user ID
 uid = 
 ```
+### WeChat Work Integration ([Weixin] Section)
+
+Optional. If set, notifications are also pushed to a WeChat Work (企业微信) group robot. Telegram and WeChat Work **coexist** — configure either or both; each enabled channel receives the same messages.
+
+1. In your WeChat Work group, add a **Group Robot** (群机器人) and copy its **Webhook URL**.
+2. Paste the full URL into `bot_url`. Use `xxxx` to disable.
+
+```ini
+[Weixin]
+; EXAMPLE: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx
+; Use 'xxxx' to disable
+bot_url = xxxx
+```
+
+### Notification Throttle ([Notify] Section)
+
+Controls how often **progress** updates ("🔁 Attempt N…") are sent while the bot keeps retrying. The startup and success notifications are not affected.
+
+```ini
+[Notify]
+; Minimum minutes between progress updates. 0 disables progress updates entirely.
+; RECOMMENDED: 30
+status_interval_minutes = 30
+```
+
+- The interval is measured in **wall-clock minutes**, independent of how fast retries happen — so changing `[Retry]` timings won't change how often you get pinged.
+- Set to `0` to silence progress updates (you'll still get the startup message and the success message when an instance is finally created).
+
 ### Machine Configuration ([Machine] Section)
 #### Settings
 Change the settings to accommodate required machine configuration.
