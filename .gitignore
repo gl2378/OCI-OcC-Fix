@@ -162,3 +162,11 @@ cython_debug/
 .DS_Store
 .idea/
 .vscode/
+
+# OCI-OcC-Fix secrets & local config (do NOT commit real credentials)
+config
+configuration.ini
+*.bak
+*.pem
+*.key
+oci_private_key.pem

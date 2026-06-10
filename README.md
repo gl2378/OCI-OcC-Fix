@@ -70,9 +70,19 @@ pip install -r requirements.txt
 ```
 # Configuration
 
+> [!IMPORTANT]
+> The repository ships **template** files only — `configuration.ini.example` and `config.example`. Your real `configuration.ini` and `config` are git-ignored so your credentials never get committed. Before configuring, copy the templates to their real filenames:
+>
+> ```bash
+> cp configuration.ini.example configuration.ini
+> cp config.example config
+> ```
+>
+> Then edit `configuration.ini` and `config` (or run the setup wizard below, which edits these real files). Never commit a `configuration.ini`/`config` that contains real values, and keep your private key (`oci_private_key.pem`) out of the repo.
+
 ## Setup Wizard
 
-If you want a guided, step-by-step setup (recommended), run:
+If you want a guided, step-by-step setup (recommended), copy the templates as shown above, then run:
 
 ```bash
 python3 setup_wizard.py
@@ -211,7 +221,7 @@ log_level = INFO
     
 2.  Download private key as  `oci_private_key.pem`
     
-3.  Create a `config` file in the repo root with the standard OCI SDK format (replace `user`, `fingerprint`, `tenancy`, `region`, and `key_file` with your actual OCI values; use the private key from step 2 for `key_file`):
+3.  Copy `config.example` to `config` in the repo root (`cp config.example config`) and fill in the standard OCI SDK format (replace `user`, `fingerprint`, `tenancy`, `region`, and `key_file` with your actual OCI values; use the private key from step 2 for `key_file`). The `config` file is git-ignored so it won't be committed:
     
 ```ini
 [DEFAULT]
