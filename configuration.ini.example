@@ -28,6 +28,10 @@ subnet_id =
 ; EXAMPLE: ocid1.bootvolume.oc1.uk-manchester-1.aaaaaaa...
 boot_volume_id = xxxx
 
+; Assign a public IP to the instance (optional - default: true)
+; Set to false for private-only instances (attach a public IP manually later)
+assign_public_ip = true
+
 
 [Instance]
 ; Unique instance name (required)

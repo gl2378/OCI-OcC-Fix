@@ -300,7 +300,10 @@ class OciOccFix:
                 source_details=self.get_source_details(),
                 create_vnic_details=oci.core.models.CreateVnicDetails(
                     subnet_id=self.config.get('OCI', 'subnet_id'),
-                    assign_public_ip=False
+                    # Defaults to True; set assign_public_ip=false in [OCI] to disable
+                    assign_public_ip=self.config.getboolean(
+                        'OCI', 'assign_public_ip', fallback=True
+                    )
                 ),
                 shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
                     ocpus=self.config.getint('Machine', 'ocpus'),
@@ -342,46 +345,63 @@ class OciOccFix:
         )
 
     def handle_success(self, instance_id: str):
-        """Handle successful creation with IP retrieval"""
+        """Handle successful creation.
+
+        Getting the instance back from launch_instance IS the success: the
+        scarce resource is now ours and a human will take over from here. IP
+        retrieval is purely best-effort — the VNIC attaches asynchronously and
+        is usually not ready the instant launch_instance returns, so we must
+        never let a missing IP turn a real success into a failure exit.
+        """
+        ip_line = self.resolve_ip_line(instance_id)
+        logging.info(f"✅ Instance created! ({instance_id}) {ip_line}")
+        self.notify_update(
+            f"🚀 Instance Ready!\n"
+            f"• {ip_line}\n"
+            f"• Instance OCID: {instance_id}\n"
+            f"• Retries: {self.total_retries}\n"
+            f"• Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        )
+        sys.exit(0)
+
+    def resolve_ip_line(self, instance_id: str) -> str:
+        """Best-effort IP lookup; never raises, returns a human-readable line."""
         try:
-            vnic = self.clients['compute'].list_vnic_attachments(
+            vnic_attachments = self.clients['compute'].list_vnic_attachments(
                 compartment_id=self.config.get('OCI', 'compartment_id'),
                 instance_id=instance_id
-            ).data[0]
+            ).data
+            if not vnic_attachments:
+                return "IP pending (VNIC not attached yet - check console)"
 
-            private_ip_obj = self.clients['network'].list_private_ips(
-                vnic_id=vnic.vnic_id
-            ).data[0]
+            private_ips = self.clients['network'].list_private_ips(
+                vnic_id=vnic_attachments[0].vnic_id
+            ).data
+            if not private_ips:
+                return "IP pending (private IP not assigned yet - check console)"
+
+            private_ip_obj = private_ips[0]
             private_ip = private_ip_obj.ip_address
 
-            # The instance is created without a public IP (assign_public_ip=False),
-            # so this lookup is best-effort: attach one manually later if needed.
-            public_ip = None
+            # A public IP (when assign_public_ip is enabled) is allocated
+            # asynchronously, so this lookup is best-effort: it may not be ready
+            # the instant the instance is returned, or may be absent entirely.
             try:
                 public_ip = self.clients['network'].get_public_ip_by_private_ip_id(
                     oci.core.models.GetPublicIpByPrivateIpIdDetails(
                         private_ip_id=private_ip_obj.id
                     )
                 ).data.ip_address
+                if public_ip:
+                    return f"Public IP: {public_ip}"
             except Exception:
                 pass
 
-            ip_line = (
-                f"Public IP: {public_ip}" if public_ip
-                else f"Private IP: {private_ip} (no public IP - attach manually)"
-            )
-            logging.info(f"✅ Instance created! {ip_line}")
-            self.notify_update(
-                f"🚀 Instance Ready!\n"
-                f"• {ip_line}\n"
-                f"• Retries: {self.total_retries}\n"
-                f"• Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            )
-            sys.exit(0)
+            return f"Private IP: {private_ip} (no public IP - attach manually)"
 
         except Exception as e:
-            logging.error(f"Success handling failed: {str(e)}")
-            sys.exit(1)
+            logging.warning(f"IP lookup failed (instance is still created): {str(e)}")
+            return "IP unavailable (instance created - check console)"
 
     def send_telegram_update(self, message: str):
         """Update Telegram message with error handling"""
